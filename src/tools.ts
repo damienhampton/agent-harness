@@ -51,7 +51,39 @@ export const toolDefs: Anthropic.Tool[] = [
       required: [],
     },
   },
+  {
+    name: "run_shell",
+    description: "Run an arbitrary shell command (git, npm, mkdir, etc.) in the current working directory and return its combined stdout/stderr and exit code. A small set of obviously destructive commands (e.g. rm -rf on / or ~, disk formatting, shutdown) are refused.",
+    input_schema: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Shell command to run." },
+      },
+      required: ["command"],
+    },
+  },
 ];
+
+// Light-touch tripwire, not a sandbox: catches the obviously catastrophic
+// cases (wipe the disk, wipe the home dir, shut the machine down) without
+// trying to be a real permission model.
+const DANGEROUS_PATTERNS: { pattern: RegExp; reason: string }[] = [
+  { pattern: /\brm\s+(-\w*\s+)*-\w*[rf]\w*(-\w+\s+)*\s+(\/|~|\$HOME)(\s|\/|$)/, reason: "recursive delete of root or home" },
+  { pattern: /\brm\s+.*(-[a-z]*r[a-z]*|-[a-z]*f[a-z]*).*\*\s*$/, reason: "recursive delete with a bare wildcard" },
+  { pattern: /\bsudo\b/, reason: "privilege escalation" },
+  { pattern: /\bdd\s+.*\bof=\/dev\//, reason: "raw write to a block device" },
+  { pattern: /\bmkfs\b|\bdiskutil\s+(erase|reformat)/i, reason: "disk formatting" },
+  { pattern: /\b(shutdown|reboot|halt|poweroff)\b/, reason: "system shutdown/reboot" },
+  { pattern: /:\(\)\s*\{\s*:\|:\s*&\s*\}\s*;\s*:/, reason: "fork bomb" },
+  { pattern: /\bchmod\s+-R\s+\d+\s+\/(\s|$)/, reason: "recursive permission change on root" },
+];
+
+function checkDangerous(command: string): string | null {
+  for (const { pattern, reason } of DANGEROUS_PATTERNS) {
+    if (pattern.test(command)) return reason;
+  }
+  return null;
+}
 
 function readFile(input: Record<string, unknown>): { output: string; isError: boolean } {
   const path = input.path;
@@ -108,8 +140,11 @@ function editFile(input: Record<string, unknown>): { output: string; isError: bo
   }
 }
 
-function runTests(input: Record<string, unknown>): { output: string; isError: boolean } {
-  const command = typeof input.command === "string" ? input.command : "npm test";
+function runCommand(command: string): { output: string; isError: boolean } {
+  const dangerReason = checkDangerous(command);
+  if (dangerReason) {
+    return { output: `Refused to run: command looks like ${dangerReason}. Not executing.`, isError: true };
+  }
   try {
     const output = execSync(command, {
       encoding: "utf-8",
@@ -127,6 +162,19 @@ function runTests(input: Record<string, unknown>): { output: string; isError: bo
   }
 }
 
+function runTests(input: Record<string, unknown>): { output: string; isError: boolean } {
+  const command = typeof input.command === "string" ? input.command : "npm test";
+  return runCommand(command);
+}
+
+function runShell(input: Record<string, unknown>): { output: string; isError: boolean } {
+  const command = input.command;
+  if (typeof command !== "string") {
+    return { output: "Missing or invalid required argument 'command'", isError: true };
+  }
+  return runCommand(command);
+}
+
 export function executeTool(name: string, input: Record<string, unknown>): { output: string; isError: boolean } {
   switch (name) {
     case "read_file":
@@ -137,6 +185,8 @@ export function executeTool(name: string, input: Record<string, unknown>): { out
       return editFile(input);
     case "run_tests":
       return runTests(input);
+    case "run_shell":
+      return runShell(input);
     default:
       return { output: `Unknown tool: ${name}`, isError: true };
   }

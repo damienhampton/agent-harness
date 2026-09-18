@@ -116,6 +116,32 @@ describe("runTurn", () => {
     expect(toolResultMsg.content[0].content).toContain("boom");
   });
 
+  it("runs a benign shell command via run_shell", async () => {
+    createMock
+      .mockResolvedValueOnce(toolUseResponse("tu1", "run_shell", { command: `node -e "console.log('hi')"` }))
+      .mockResolvedValueOnce(textResponse("it printed hi"));
+
+    const messages: any[] = [{ role: "user", content: "run a command" }];
+    await runTurn("fake-key", messages, () => {});
+
+    const toolResultMsg = messages[2];
+    expect(toolResultMsg.content[0].is_error).toBe(false);
+    expect(toolResultMsg.content[0].content).toContain("hi");
+  });
+
+  it("refuses an obviously destructive run_shell command without executing it", async () => {
+    createMock
+      .mockResolvedValueOnce(toolUseResponse("tu1", "run_shell", { command: "sudo rm -rf /" }))
+      .mockResolvedValueOnce(textResponse("I won't run that"));
+
+    const messages: any[] = [{ role: "user", content: "wipe everything" }];
+    await runTurn("fake-key", messages, () => {});
+
+    const toolResultMsg = messages[2];
+    expect(toolResultMsg.content[0].is_error).toBe(true);
+    expect(toolResultMsg.content[0].content).toContain("Refused to run");
+  });
+
   it("compacts history via a summary call when the context window fills up", async () => {
     createMock
       .mockResolvedValueOnce(textResponse("done for now", 150_000))
