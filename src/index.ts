@@ -20,14 +20,20 @@ async function main(): Promise<void> {
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  console.log("Interactive mode. Type /exit to quit.");
+  console.log("Interactive mode. Type /exit or press Ctrl+D to quit.");
   while (true) {
-    const line = await rl.question("> ");
+    let line: string;
+    try {
+      line = await rl.question("> ");
+    } catch {
+      break; // stdin closed (e.g. Ctrl+D)
+    }
     if (line.trim() === "/exit") break;
     if (!line.trim()) continue;
     messages.push({ role: "user", content: line });
     await runTurn(apiKey, messages, console.log);
   }
+  console.log("\nBye.");
   rl.close();
 }
 
