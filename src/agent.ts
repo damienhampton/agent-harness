@@ -5,14 +5,17 @@ import { shouldCompact, compact } from "./compact.js";
 
 const MODEL = "claude-sonnet-5";
 const MAX_TOOL_TURNS = 25;
+const MAX_TOKENS = 8192;
 
 export type OnText = (text: string) => void;
 
 /**
  * Runs one user turn to completion: repeatedly calls the model, executes any
  * tool calls, and feeds results back, until the model responds with no tool
- * calls or MAX_TOOL_TURNS is hit. Mutates `messages` in place so callers can
- * keep reusing the same array across turns (interactive mode).
+ * calls or MAX_TOOL_TURNS is hit. A response truncated by max_tokens (e.g.
+ * cut off mid-thinking, with no text or tool_use) is discarded and retried
+ * rather than treated as a completed turn. Mutates `messages` in place so
+ * callers can keep reusing the same array across turns (interactive mode).
  *
  * No dependency on process.env/argv/stdio — those belong to the CLI adapter.
  */
@@ -23,11 +26,17 @@ export async function runTurn(apiKey: string, messages: Anthropic.MessageParam[]
     logEvent("request", { turn, messages });
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 4096,
+      max_tokens: MAX_TOKENS,
       tools: toolDefs,
       messages,
     });
     logEvent("response", { turn, response });
+
+    if (response.stop_reason === "max_tokens") {
+      logEvent("truncated", { turn, contentTypes: response.content.map((b) => b.type) });
+      onText(`[response truncated by max_tokens, retrying]`);
+      continue;
+    }
 
     messages.push({ role: "assistant", content: response.content });
 

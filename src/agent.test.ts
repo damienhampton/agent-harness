@@ -24,6 +24,14 @@ function toolUseResponse(id: string, name: string, input: Record<string, unknown
   };
 }
 
+function truncatedResponse() {
+  return {
+    content: [{ type: "thinking", thinking: "still reasoning..." }],
+    stop_reason: "max_tokens",
+    usage: { input_tokens: 100, output_tokens: 8192 },
+  };
+}
+
 let dir: string;
 
 beforeEach(() => {
@@ -119,6 +127,22 @@ describe("runTurn", () => {
     expect(createMock).toHaveBeenCalledTimes(2);
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toContain("summary: user asked X, we did Y");
+  });
+
+  it("retries instead of silently ending the turn on max_tokens truncation", async () => {
+    createMock
+      .mockResolvedValueOnce(truncatedResponse())
+      .mockResolvedValueOnce(textResponse("finally, an answer"));
+
+    const messages: any[] = [{ role: "user", content: "think hard about this" }];
+    const seen: string[] = [];
+    await runTurn("fake-key", messages, (t) => seen.push(t));
+
+    expect(createMock).toHaveBeenCalledTimes(2);
+    expect(seen.some((t) => t.includes("truncated"))).toBe(true);
+    expect(seen.at(-1)).toBe("finally, an answer");
+    // the truncated attempt must not be left in history
+    expect(messages.filter((m) => m.role === "assistant")).toHaveLength(1);
   });
 
   it("stops after the max tool-turn cap instead of looping forever", async () => {
