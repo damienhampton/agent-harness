@@ -4,9 +4,12 @@
   "description": "",
   "main": "index.js",
   "type": "module",
+  "bin": {
+    "agent-harness": "dist/index.js"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js",
     "test": "vitest run"
   },
   "keywords": [],

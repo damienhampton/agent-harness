@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
 import type Anthropic from "@anthropic-ai/sdk";
 import { runTurn } from "./agent.js";
