@@ -1,0 +1,114 @@
+# TODO
+
+Suggestions from code review, tracked as a checklist. See PLAN.md for the
+overall bootstrap plan these slot into.
+
+## Bugs / robustness
+
+- [ ] Wrap `client.messages.create` calls with retry/backoff (or use SDK
+      `maxRetries`) so a transient 429/500/`overloaded_error` doesn't crash
+      the whole REPL session.
+- [ ] Wrap `compact()` in try/catch so a failed summarization degrades to
+      "skip compaction, log a warning, carry on" instead of crashing a turn
+      that otherwise succeeded.
+- [ ] Change compaction to a sliding window: summarize everything except the
+      last N messages, keep those verbatim, instead of replacing the entire
+      history with one summary.
+- [ ] Fix stale `"main": "index.js"` in package.json (real entry is
+      `dist/index.js` via `bin`).
+- [ ] Add `AbortController`/cancellation support so Ctrl+C can interrupt a
+      long-running tool call (e.g. `run_shell`) instead of only killing the
+      whole process.
+
+## Safety
+
+- [ ] Add a confirmation prompt in interactive mode before mutating/dangerous
+      tool calls (`write_file`, `edit_file`, `run_shell`, non-default
+      `run_tests`). Add a `--yolo` / `AGENT_AUTO_APPROVE` flag to skip it for
+      one-shot/CI use.
+- [ ] Sandbox file tool paths: resolve against `process.cwd()` and reject
+      absolute paths / `../` escapes outside the project root (with an
+      explicit override flag if ever needed).
+- [ ] Avoid logging secrets by default — redact or otherwise handle tool
+      input/output before writing to `logs/*.jsonl` (e.g. `.env` contents
+      read by the model currently land in logs verbatim).
+- [ ] Keep the dangerous-command blocklist as defense-in-depth backing up the
+      approval step above, not the primary control.
+
+## Architecture / maintainability
+
+- [ ] Consolidate tool definitions and dispatch into a single registry
+      (`{ name, description, input_schema, handler }[]`) instead of two
+      hand-synced sources of truth (`toolDefs` array + `executeTool` switch).
+- [ ] Replace repeated manual `typeof` validation in `tools.ts` with a small
+      shared schema-validation helper (or zod) driven off `input_schema`.
+- [ ] Narrow `run_tests` (drop the arbitrary `command` override, or merge it
+      into `run_shell`) so it isn't just a redundant alias with the same
+      capability.
+- [ ] Pull magic numbers/strings (`"claude-sonnet-5"`, `MAX_TOOL_TURNS`,
+      `MAX_TOKENS`, `COMPACT_THRESHOLD_TOKENS`) into a single config module
+      with env var overrides.
+- [ ] Add a system prompt: working directory, behavioral guidelines (prefer
+      `edit_file` over `write_file` for existing files, ask before
+      destructive actions), basic repo context.
+
+## Testing
+
+- [ ] Add tests for `index.ts` (CLI arg parsing, missing API key,
+      interactive loop, Ctrl+D handling).
+- [ ] Add direct unit tests for `checkDangerous` edge cases/bypasses in
+      `tools.ts`, not just the two examples exercised via `agent.test.ts`.
+- [ ] Add a test that a failed compaction call doesn't crash the turn.
+- [ ] Add a test for `run_shell` timeout behavior.
+
+## Features
+
+- [ ] Search/navigation tools (`glob` / `list_dir` / `grep`) so the model
+      isn't limited to files it already knows the exact path of.
+- [ ] Streaming output via `client.messages.stream()` instead of `onText`
+      firing once per complete response block.
+- [ ] Diff preview for `write_file`/`edit_file`, combined with the approval
+      step above, so a human can accept/reject before a change is written.
+- [ ] Cost/usage reporting: sum input/output tokens (and a rough $ estimate)
+      per session and print at exit.
+- [ ] Config file / CLI flags for model name, max turns, compaction
+      threshold, allowed tool set, sandboxed root.
+- [ ] Git-aware safety net for self-modification (PLAN.md step 5):
+      auto-commit or require a clean working tree before a session starts,
+      so undo is always available.
+- [ ] Retry/backoff wrapper around the Anthropic client call, surfacing
+      rate-limit info to the user instead of a raw stack trace.
+
+## UX
+
+- [ ] Multi-line input in interactive mode (currently `rl.question` reads a
+      single line, so pasting/writing a multi-paragraph prompt doesn't work).
+      Needs a way to signal "end of input" (e.g. blank-line-to-submit, a
+      `\` continuation, or a toggleable paste/edit mode).
+- [ ] Activity indicator between sending a message and the first output
+      (spinner/"thinking..." line) so the CLI doesn't look hung during the
+      request/tool-call round trip.
+
+## Project context
+
+- [ ] Introduce a "project" concept: persistent state that lives across
+      sessions, separate from a single conversation. Needs design, but
+      should include at least:
+  - [ ] A project-level todo list the model (and human) can read/update
+        across sessions, not just within one conversation.
+  - [ ] Memory of related past conversations/sessions (e.g. summaries
+        pulled from `logs/`) so context can be recovered without replaying
+        full history.
+  - [ ] Support projects that map to a single repo, to multiple repos, and
+        to no repo at all (e.g. research/planning work) — project scope
+        shouldn't assume one repo = one project.
+  - [ ] Decide where this state lives (e.g. a `.agent/` directory per
+        project vs. a separate store) and how it's selected/switched
+        between at startup.
+
+## Nitpicks
+
+- [ ] Add an `engines` field to package.json pinning a Node version.
+- [ ] Add a LICENSE file matching the declared `"license": "ISC"`.
+- [ ] Add lint/format tooling (ESLint/Prettier).
+- [ ] Add a CI workflow (e.g. GitHub Actions) to run build + tests on push/PR.
