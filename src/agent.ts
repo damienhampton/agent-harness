@@ -10,6 +10,25 @@ const MAX_TOKENS = 8192;
 
 export type OnText = (text: string) => void;
 
+async function maybeCompact(
+  client: Anthropic,
+  messages: Anthropic.MessageParam[],
+  usage: Anthropic.Usage,
+  onText: OnText,
+  turn: number
+): Promise<void> {
+  if (!shouldCompact(usage)) return;
+  try {
+    const compacted = await compact(client, messages);
+    messages.length = 0;
+    messages.push(...compacted);
+    onText(`[context window filling up, compacted conversation history]`);
+  } catch (err) {
+    logEvent("compaction_failed", { turn, error: (err as Error).message });
+    onText(`[compaction failed, continuing without it: ${(err as Error).message}]`);
+  }
+}
+
 /**
  * Runs one user turn to completion: repeatedly calls the model, executes any
  * tool calls, and feeds results back, until the model responds with no tool
@@ -64,11 +83,7 @@ export async function runTurn(
     );
 
     if (toolUses.length === 0) {
-      if (shouldCompact(response.usage)) {
-        const compacted = await compact(client, messages);
-        messages.length = 0;
-        messages.push(...compacted);
-      }
+      await maybeCompact(client, messages, response.usage, onText, turn);
       return;
     }
 
@@ -101,6 +116,8 @@ export async function runTurn(
     }
 
     messages.push({ role: "user", content: toolResults });
+
+    await maybeCompact(client, messages, response.usage, onText, turn);
   }
 
   onText(`[stopped after ${MAX_TOOL_TURNS} tool turns without a final response]`);

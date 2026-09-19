@@ -8,9 +8,16 @@ overall bootstrap plan these slot into.
 - [ ] Wrap `client.messages.create` calls with retry/backoff (or use SDK
       `maxRetries`) so a transient 429/500/`overloaded_error` doesn't crash
       the whole REPL session.
-- [ ] Wrap `compact()` in try/catch so a failed summarization degrades to
+- [x] Wrap `compact()` in try/catch so a failed summarization degrades to
       "skip compaction, log a warning, carry on" instead of crashing a turn
       that otherwise succeeded.
+- [x] Fix compaction only being checked when a turn ends with no tool call:
+      a turn that keeps calling tools for all `MAX_TOOL_TURNS` never
+      compacted, so a long tool-heavy turn could grow past the model's
+      hard prompt-token limit before ever getting a chance to shrink.
+      `maybeCompact` now runs after every tool round trip, not just at
+      turn-end. (Found for real: a self-mod session hit a 1,008,113-token
+      prompt this way.)
 - [ ] Change compaction to a sliding window: summarize everything except the
       last N messages, keep those verbatim, instead of replacing the entire
       history with one summary.
@@ -49,6 +56,12 @@ overall bootstrap plan these slot into.
 - [x] Keep the dangerous-command blocklist as defense-in-depth backing up the
       approval step above, not the primary control (still checked inside
       `run_shell`/`run_tests` even in `auto` mode).
+- [ ] The risk classification treats `run_shell` as one flat "shell" risk
+      level, so `git push` gets the same approval treatment as `ls`. In
+      practice a self-mod session ran `git push` to the real GitHub remote
+      unattended. Consider a step above "shell": mark commands that touch
+      shared/remote state (`git push`, `npm publish`, etc.) as needing
+      explicit approval even in `auto` mode.
 
 ## Architecture / maintainability
 

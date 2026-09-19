@@ -161,6 +161,45 @@ describe("runTurn", () => {
     expect(messages[0].content).toContain("summary: user asked X, we did Y");
   });
 
+  it("degrades to a warning instead of crashing when compaction itself fails", async () => {
+    createMock
+      .mockResolvedValueOnce(textResponse("done for now", 150_000))
+      .mockRejectedValueOnce(new Error("summary call failed"));
+
+    const messages: any[] = [{ role: "user", content: "a long conversation happened before this" }];
+    const seen: string[] = [];
+    await expect(runTurn("fake-key", messages, (t) => seen.push(t))).resolves.toBeUndefined();
+
+    expect(seen.some((t) => t.includes("compaction failed"))).toBe(true);
+    // history is left untouched rather than half-cleared
+    expect(messages).toHaveLength(2);
+  });
+
+  it("compacts mid-turn after a tool round trip, not just when the turn ends", async () => {
+    const filePath = join(dir, "big.txt");
+    writeFileSync(filePath, "x");
+
+    createMock
+      .mockResolvedValueOnce(toolUseResponse("tu1", "read_file", { path: filePath }, 150_000))
+      .mockResolvedValueOnce(textResponse("summary: read a file, more to do"))
+      .mockResolvedValueOnce(textResponse("all done"));
+
+    const messages: any[] = [{ role: "user", content: "do a long task" }];
+    const seen: string[] = [];
+    await runTurn("fake-key", messages, (t) => seen.push(t));
+
+    // call 1: the tool_use turn that pushes usage over threshold
+    // call 2: compact()'s own summary call, made right after that round trip
+    // call 3: the next turn, working off the compacted history
+    expect(createMock).toHaveBeenCalledTimes(3);
+    expect(seen.some((t) => t.includes("compacted"))).toBe(true);
+    expect(seen.at(-1)).toBe("all done");
+    // history collapsed to [summary, assistant "all done"], not left growing
+    // across the whole 25-tool-turn budget
+    expect(messages).toHaveLength(2);
+    expect(messages[0].content).toContain("summary: read a file, more to do");
+  });
+
   it("retries instead of silently ending the turn on max_tokens truncation", async () => {
     createMock
       .mockResolvedValueOnce(truncatedResponse())
