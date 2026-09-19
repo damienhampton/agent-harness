@@ -28,6 +28,28 @@ Interactive (persists conversation across turns until `/exit`):
 npm start
 ```
 
+## Tool-call approval modes
+
+Mutating tools (`write_file`, `edit_file`) and shell tools (`run_shell`,
+`run_tests`) require approval before they run; `read_file` never does.
+Approval mode defaults to `confirm` and can be set with `--mode`:
+
+```bash
+npm start -- --mode=auto "fix the failing test"
+```
+
+- `confirm` (default) — prompts before each mutating/shell call. Answer
+  `y` to allow once, `a` to allow that tool for the rest of the session, or
+  `n`/anything else to deny. In one-shot mode with no TTY on stdin, prompts
+  aren't possible and anything needing approval is refused instead of
+  hanging — pass `--mode=auto` for non-interactive use.
+- `plan` — dry run. Mutating/shell calls are always blocked, no prompt.
+  Useful for a first look at an unfamiliar repo.
+- `auto` — no prompts. Shell commands still go through the dangerous-command
+  blocklist in `tools.ts` regardless of mode.
+
+In interactive mode, switch modes mid-session with `/mode confirm|plan|auto`.
+
 ## Tools available to the model
 
 - `read_file`

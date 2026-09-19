@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createApprovalState, type OnApprovalRequest } from "./approval.js";
+
+/** Approves every request once, without granting session-wide approval. */
+const approveOnce: OnApprovalRequest = async () => "once";
 
 const createMock = vi.fn();
 
@@ -92,7 +96,7 @@ describe("runTurn", () => {
       .mockResolvedValueOnce(textResponse("that string isn't unique, can you clarify?"));
 
     const messages: any[] = [{ role: "user", content: "replace foo with bar" }];
-    await runTurn("fake-key", messages, () => {});
+    await runTurn("fake-key", messages, () => {}, createApprovalState("auto"));
 
     const toolResultMsg = messages[2];
     expect(toolResultMsg.content[0].is_error).toBe(true);
@@ -108,7 +112,7 @@ describe("runTurn", () => {
       .mockResolvedValueOnce(textResponse("the tests failed"));
 
     const messages: any[] = [{ role: "user", content: "run the tests" }];
-    await runTurn("fake-key", messages, () => {});
+    await runTurn("fake-key", messages, () => {}, createApprovalState("auto"));
 
     const toolResultMsg = messages[2];
     expect(toolResultMsg.content[0].is_error).toBe(false);
@@ -122,7 +126,7 @@ describe("runTurn", () => {
       .mockResolvedValueOnce(textResponse("it printed hi"));
 
     const messages: any[] = [{ role: "user", content: "run a command" }];
-    await runTurn("fake-key", messages, () => {});
+    await runTurn("fake-key", messages, () => {}, createApprovalState("auto"));
 
     const toolResultMsg = messages[2];
     expect(toolResultMsg.content[0].is_error).toBe(false);
@@ -135,7 +139,9 @@ describe("runTurn", () => {
       .mockResolvedValueOnce(textResponse("I won't run that"));
 
     const messages: any[] = [{ role: "user", content: "wipe everything" }];
-    await runTurn("fake-key", messages, () => {});
+    // auto mode so we exercise the dangerous-command blocklist inside the
+    // tool itself, not the approval layer (covered separately below).
+    await runTurn("fake-key", messages, () => {}, createApprovalState("auto"));
 
     const toolResultMsg = messages[2];
     expect(toolResultMsg.content[0].is_error).toBe(true);
@@ -153,6 +159,45 @@ describe("runTurn", () => {
     expect(createMock).toHaveBeenCalledTimes(2);
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toContain("summary: user asked X, we did Y");
+  });
+
+  it("degrades to a warning instead of crashing when compaction itself fails", async () => {
+    createMock
+      .mockResolvedValueOnce(textResponse("done for now", 150_000))
+      .mockRejectedValueOnce(new Error("summary call failed"));
+
+    const messages: any[] = [{ role: "user", content: "a long conversation happened before this" }];
+    const seen: string[] = [];
+    await expect(runTurn("fake-key", messages, (t) => seen.push(t))).resolves.toBeUndefined();
+
+    expect(seen.some((t) => t.includes("compaction failed"))).toBe(true);
+    // history is left untouched rather than half-cleared
+    expect(messages).toHaveLength(2);
+  });
+
+  it("compacts mid-turn after a tool round trip, not just when the turn ends", async () => {
+    const filePath = join(dir, "big.txt");
+    writeFileSync(filePath, "x");
+
+    createMock
+      .mockResolvedValueOnce(toolUseResponse("tu1", "read_file", { path: filePath }, 150_000))
+      .mockResolvedValueOnce(textResponse("summary: read a file, more to do"))
+      .mockResolvedValueOnce(textResponse("all done"));
+
+    const messages: any[] = [{ role: "user", content: "do a long task" }];
+    const seen: string[] = [];
+    await runTurn("fake-key", messages, (t) => seen.push(t));
+
+    // call 1: the tool_use turn that pushes usage over threshold
+    // call 2: compact()'s own summary call, made right after that round trip
+    // call 3: the next turn, working off the compacted history
+    expect(createMock).toHaveBeenCalledTimes(3);
+    expect(seen.some((t) => t.includes("compacted"))).toBe(true);
+    expect(seen.at(-1)).toBe("all done");
+    // history collapsed to [summary, assistant "all done"], not left growing
+    // across the whole 25-tool-turn budget
+    expect(messages).toHaveLength(2);
+    expect(messages[0].content).toContain("summary: read a file, more to do");
   });
 
   it("retries instead of silently ending the turn on max_tokens truncation", async () => {
@@ -182,5 +227,104 @@ describe("runTurn", () => {
 
     expect(seen.some((t) => t.includes("stopped after 25 tool turns"))).toBe(true);
     expect(createMock).toHaveBeenCalledTimes(25);
+  });
+});
+
+describe("tool approval", () => {
+  it("does not require approval for read-only tools even in confirm mode (the default)", async () => {
+    const filePath = join(dir, "greeting.txt");
+    writeFileSync(filePath, "hello world");
+
+    createMock
+      .mockResolvedValueOnce(toolUseResponse("tu1", "read_file", { path: filePath }))
+      .mockResolvedValueOnce(textResponse("done"));
+
+    const messages: any[] = [{ role: "user", content: "read the file" }];
+    // No onApprovalRequest supplied at all — read_file must not need one.
+    await runTurn("fake-key", messages, () => {}, createApprovalState("confirm"));
+
+    expect(messages[2].content[0].is_error).toBe(false);
+    expect(messages[2].content[0].content).toBe("hello world");
+  });
+
+  it("denies a mutating call in confirm mode when no approval prompt is available (no TTY)", async () => {
+    const filePath = join(dir, "new.txt");
+
+    createMock
+      .mockResolvedValueOnce(toolUseResponse("tu1", "write_file", { path: filePath, content: "hi" }))
+      .mockResolvedValueOnce(textResponse("couldn't write it"));
+
+    const messages: any[] = [{ role: "user", content: "write the file" }];
+    await runTurn("fake-key", messages, () => {}, createApprovalState("confirm"));
+
+    expect(messages[2].content[0].is_error).toBe(true);
+    expect(messages[2].content[0].content).toContain("mode=auto");
+  });
+
+  it("allows a mutating call in confirm mode when the human approves once", async () => {
+    const filePath = join(dir, "new.txt");
+
+    createMock
+      .mockResolvedValueOnce(toolUseResponse("tu1", "write_file", { path: filePath, content: "hi" }))
+      .mockResolvedValueOnce(textResponse("wrote it"));
+
+    const messages: any[] = [{ role: "user", content: "write the file" }];
+    await runTurn("fake-key", messages, () => {}, createApprovalState("confirm"), approveOnce);
+
+    expect(messages[2].content[0].is_error).toBe(false);
+    expect(readFileSync(filePath, "utf-8")).toBe("hi");
+  });
+
+  it("does not re-prompt for a tool approved for the rest of the session", async () => {
+    const filePath = join(dir, "new.txt");
+    const approvalRequests: string[] = [];
+    const approveSessionOnFirstAsk: OnApprovalRequest = async ({ tool }) => {
+      approvalRequests.push(tool);
+      return "session";
+    };
+
+    createMock
+      .mockResolvedValueOnce(toolUseResponse("tu1", "write_file", { path: filePath, content: "one" }))
+      .mockResolvedValueOnce(toolUseResponse("tu2", "write_file", { path: filePath, content: "two" }))
+      .mockResolvedValueOnce(textResponse("done"));
+
+    const approvalState = createApprovalState("confirm");
+    const messages: any[] = [{ role: "user", content: "write it twice" }];
+    await runTurn("fake-key", messages, () => {}, approvalState, approveSessionOnFirstAsk);
+
+    expect(approvalRequests).toEqual(["write_file"]); // only asked once
+    expect(readFileSync(filePath, "utf-8")).toBe("two");
+  });
+
+  it("denies a user's explicit refusal without executing the tool", async () => {
+    const filePath = join(dir, "new.txt");
+    const denyAll: OnApprovalRequest = async () => "deny";
+
+    createMock
+      .mockResolvedValueOnce(toolUseResponse("tu1", "write_file", { path: filePath, content: "hi" }))
+      .mockResolvedValueOnce(textResponse("ok, not writing it"));
+
+    const messages: any[] = [{ role: "user", content: "write the file" }];
+    await runTurn("fake-key", messages, () => {}, createApprovalState("confirm"), denyAll);
+
+    expect(messages[2].content[0].is_error).toBe(true);
+    expect(messages[2].content[0].content).toContain("Denied");
+  });
+
+  it("blocks mutating/shell tools outright in plan mode, without prompting", async () => {
+    const filePath = join(dir, "new.txt");
+    const shouldNotBeCalled: OnApprovalRequest = async () => {
+      throw new Error("should not prompt in plan mode");
+    };
+
+    createMock
+      .mockResolvedValueOnce(toolUseResponse("tu1", "write_file", { path: filePath, content: "hi" }))
+      .mockResolvedValueOnce(textResponse("can't do that in plan mode"));
+
+    const messages: any[] = [{ role: "user", content: "write the file" }];
+    await runTurn("fake-key", messages, () => {}, createApprovalState("plan"), shouldNotBeCalled);
+
+    expect(messages[2].content[0].is_error).toBe(true);
+    expect(messages[2].content[0].content).toContain("plan mode");
   });
 });

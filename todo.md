@@ -8,9 +8,16 @@ overall bootstrap plan these slot into.
 - [ ] Wrap `client.messages.create` calls with retry/backoff (or use SDK
       `maxRetries`) so a transient 429/500/`overloaded_error` doesn't crash
       the whole REPL session.
-- [ ] Wrap `compact()` in try/catch so a failed summarization degrades to
+- [x] Wrap `compact()` in try/catch so a failed summarization degrades to
       "skip compaction, log a warning, carry on" instead of crashing a turn
       that otherwise succeeded.
+- [x] Fix compaction only being checked when a turn ends with no tool call:
+      a turn that keeps calling tools for all `MAX_TOOL_TURNS` never
+      compacted, so a long tool-heavy turn could grow past the model's
+      hard prompt-token limit before ever getting a chance to shrink.
+      `maybeCompact` now runs after every tool round trip, not just at
+      turn-end. (Found for real: a self-mod session hit a 1,008,113-token
+      prompt this way.)
 - [ ] Change compaction to a sliding window: summarize everything except the
       last N messages, keep those verbatim, instead of replacing the entire
       history with one summary.
@@ -22,18 +29,39 @@ overall bootstrap plan these slot into.
 
 ## Safety
 
-- [ ] Add a confirmation prompt in interactive mode before mutating/dangerous
-      tool calls (`write_file`, `edit_file`, `run_shell`, non-default
-      `run_tests`). Add a `--yolo` / `AGENT_AUTO_APPROVE` flag to skip it for
-      one-shot/CI use.
+- [x] Add a tool-call approval/permission layer instead of a single on/off
+      switch (`src/approval.ts`, wired into `runTurn` and the CLI):
+  - [x] Classify tools by risk: read-only (`read_file`) vs. mutating
+        (`write_file`, `edit_file`) vs. shell (`run_shell`, `run_tests`).
+        Extend this map when `list_dir`/`grep` are added.
+  - [x] Support modes: `confirm` (default — read-only auto-approved,
+        mutating/shell prompt each time), `plan`/dry-run (mutating/shell
+        always blocked, no prompt — for a safe first look at an unfamiliar
+        repo), `auto`/yolo (no prompts, still runs through the
+        dangerous-command blocklist) — for one-shot/CI use and step 4
+        dogfooding. Set via `--mode=confirm|plan|auto` on the CLI.
+  - [x] In interactive mode, the mode can be switched mid-session via
+        `/mode confirm|plan|auto`, not just fixed at startup.
+  - [x] At the approval prompt, support "approve for the rest of this
+        session" (per-tool, `[a]lways`) in addition to yes/no-this-once.
+  - [x] One-shot mode with no TTY on stdin skips prompting entirely and
+        anything needing approval is refused with a message pointing at
+        `--mode=auto`, rather than hanging.
 - [ ] Sandbox file tool paths: resolve against `process.cwd()` and reject
       absolute paths / `../` escapes outside the project root (with an
       explicit override flag if ever needed).
 - [ ] Avoid logging secrets by default — redact or otherwise handle tool
       input/output before writing to `logs/*.jsonl` (e.g. `.env` contents
       read by the model currently land in logs verbatim).
-- [ ] Keep the dangerous-command blocklist as defense-in-depth backing up the
-      approval step above, not the primary control.
+- [x] Keep the dangerous-command blocklist as defense-in-depth backing up the
+      approval step above, not the primary control (still checked inside
+      `run_shell`/`run_tests` even in `auto` mode).
+- [ ] The risk classification treats `run_shell` as one flat "shell" risk
+      level, so `git push` gets the same approval treatment as `ls`. In
+      practice a self-mod session ran `git push` to the real GitHub remote
+      unattended. Consider a step above "shell": mark commands that touch
+      shared/remote state (`git push`, `npm publish`, etc.) as needing
+      explicit approval even in `auto` mode.
 
 ## Architecture / maintainability
 
