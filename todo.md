@@ -22,10 +22,25 @@ overall bootstrap plan these slot into.
 
 ## Safety
 
-- [ ] Add a confirmation prompt in interactive mode before mutating/dangerous
-      tool calls (`write_file`, `edit_file`, `run_shell`, non-default
-      `run_tests`). Add a `--yolo` / `AGENT_AUTO_APPROVE` flag to skip it for
-      one-shot/CI use.
+- [ ] Add a tool-call approval/permission layer instead of a single on/off
+      switch:
+  - [ ] Classify tools by risk: read-only (`read_file`, future
+        `list_dir`/`grep`) vs. mutating (`write_file`, `edit_file`) vs.
+        shell (`run_shell`, non-default `run_tests`).
+  - [ ] Support modes: `confirm` (default — read-only auto-approved,
+        mutating/shell prompt each time), `plan`/dry-run (mutating/shell
+        blocked or always prompted, for first look at an unfamiliar repo),
+        `auto`/yolo (no prompts, still runs through the dangerous-command
+        blocklist) — for one-shot/CI use and step 4 dogfooding.
+  - [ ] In interactive mode, let the mode be switched mid-session (e.g. a
+        `/mode confirm|plan|auto` command), not just fixed at startup via a
+        CLI flag.
+  - [ ] At the approval prompt, support "approve for the rest of this
+        session" (per-tool) in addition to yes/no-this-once, so a task
+        needing many writes doesn't nag repeatedly.
+  - [ ] Decide behavior for one-shot mode with no TTY: default to `confirm`
+        should refuse and tell the user to pass `--mode=auto`, rather than
+        hang waiting for input.
 - [ ] Sandbox file tool paths: resolve against `process.cwd()` and reject
       absolute paths / `../` escapes outside the project root (with an
       explicit override flag if ever needed).
