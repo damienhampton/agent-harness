@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { execSync } from "node:child_process";
 import type Anthropic from "@anthropic-ai/sdk";
+import type { ToolRisk } from "./approval.js";
 
 export const toolDefs: Anthropic.Tool[] = [
   {
@@ -63,6 +64,17 @@ export const toolDefs: Anthropic.Tool[] = [
     },
   },
 ];
+
+// Risk classification used by the approval layer (see approval.ts). Unknown
+// tool names default to "mutating" (the safer default) wherever this map is
+// consulted.
+export const TOOL_RISK: Record<string, ToolRisk> = {
+  read_file: "readonly",
+  write_file: "mutating",
+  edit_file: "mutating",
+  run_tests: "shell",
+  run_shell: "shell",
+};
 
 // Light-touch tripwire, not a sandbox: catches the obviously catastrophic
 // cases (wipe the disk, wipe the home dir, shut the machine down) without

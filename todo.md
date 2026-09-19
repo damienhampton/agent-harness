@@ -22,33 +22,33 @@ overall bootstrap plan these slot into.
 
 ## Safety
 
-- [ ] Add a tool-call approval/permission layer instead of a single on/off
-      switch:
-  - [ ] Classify tools by risk: read-only (`read_file`, future
-        `list_dir`/`grep`) vs. mutating (`write_file`, `edit_file`) vs.
-        shell (`run_shell`, non-default `run_tests`).
-  - [ ] Support modes: `confirm` (default — read-only auto-approved,
+- [x] Add a tool-call approval/permission layer instead of a single on/off
+      switch (`src/approval.ts`, wired into `runTurn` and the CLI):
+  - [x] Classify tools by risk: read-only (`read_file`) vs. mutating
+        (`write_file`, `edit_file`) vs. shell (`run_shell`, `run_tests`).
+        Extend this map when `list_dir`/`grep` are added.
+  - [x] Support modes: `confirm` (default — read-only auto-approved,
         mutating/shell prompt each time), `plan`/dry-run (mutating/shell
-        blocked or always prompted, for first look at an unfamiliar repo),
-        `auto`/yolo (no prompts, still runs through the dangerous-command
-        blocklist) — for one-shot/CI use and step 4 dogfooding.
-  - [ ] In interactive mode, let the mode be switched mid-session (e.g. a
-        `/mode confirm|plan|auto` command), not just fixed at startup via a
-        CLI flag.
-  - [ ] At the approval prompt, support "approve for the rest of this
-        session" (per-tool) in addition to yes/no-this-once, so a task
-        needing many writes doesn't nag repeatedly.
-  - [ ] Decide behavior for one-shot mode with no TTY: default to `confirm`
-        should refuse and tell the user to pass `--mode=auto`, rather than
-        hang waiting for input.
+        always blocked, no prompt — for a safe first look at an unfamiliar
+        repo), `auto`/yolo (no prompts, still runs through the
+        dangerous-command blocklist) — for one-shot/CI use and step 4
+        dogfooding. Set via `--mode=confirm|plan|auto` on the CLI.
+  - [x] In interactive mode, the mode can be switched mid-session via
+        `/mode confirm|plan|auto`, not just fixed at startup.
+  - [x] At the approval prompt, support "approve for the rest of this
+        session" (per-tool, `[a]lways`) in addition to yes/no-this-once.
+  - [x] One-shot mode with no TTY on stdin skips prompting entirely and
+        anything needing approval is refused with a message pointing at
+        `--mode=auto`, rather than hanging.
 - [ ] Sandbox file tool paths: resolve against `process.cwd()` and reject
       absolute paths / `../` escapes outside the project root (with an
       explicit override flag if ever needed).
 - [ ] Avoid logging secrets by default — redact or otherwise handle tool
       input/output before writing to `logs/*.jsonl` (e.g. `.env` contents
       read by the model currently land in logs verbatim).
-- [ ] Keep the dangerous-command blocklist as defense-in-depth backing up the
-      approval step above, not the primary control.
+- [x] Keep the dangerous-command blocklist as defense-in-depth backing up the
+      approval step above, not the primary control (still checked inside
+      `run_shell`/`run_tests` even in `auto` mode).
 
 ## Architecture / maintainability
 
