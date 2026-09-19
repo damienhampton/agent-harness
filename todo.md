@@ -79,6 +79,33 @@ overall bootstrap plan these slot into.
 - [ ] Retry/backoff wrapper around the Anthropic client call, surfacing
       rate-limit info to the user instead of a raw stack trace.
 
+## UX
+
+- [ ] Multi-line input in interactive mode (currently `rl.question` reads a
+      single line, so pasting/writing a multi-paragraph prompt doesn't work).
+      Needs a way to signal "end of input" (e.g. blank-line-to-submit, a
+      `\` continuation, or a toggleable paste/edit mode).
+- [ ] Activity indicator between sending a message and the first output
+      (spinner/"thinking..." line) so the CLI doesn't look hung during the
+      request/tool-call round trip.
+
+## Project context
+
+- [ ] Introduce a "project" concept: persistent state that lives across
+      sessions, separate from a single conversation. Needs design, but
+      should include at least:
+  - [ ] A project-level todo list the model (and human) can read/update
+        across sessions, not just within one conversation.
+  - [ ] Memory of related past conversations/sessions (e.g. summaries
+        pulled from `logs/`) so context can be recovered without replaying
+        full history.
+  - [ ] Support projects that map to a single repo, to multiple repos, and
+        to no repo at all (e.g. research/planning work) — project scope
+        shouldn't assume one repo = one project.
+  - [ ] Decide where this state lives (e.g. a `.agent/` directory per
+        project vs. a separate store) and how it's selected/switched
+        between at startup.
+
 ## Nitpicks
 
 - [ ] Add an `engines` field to package.json pinning a Node version.
