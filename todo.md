@@ -5,9 +5,16 @@ overall bootstrap plan these slot into.
 
 ## Bugs / robustness
 
-- [ ] Wrap `client.messages.create` calls with retry/backoff (or use SDK
+- [x] Wrap `client.messages.create` calls with retry/backoff (or use SDK
       `maxRetries`) so a transient 429/500/`overloaded_error` doesn't crash
-      the whole REPL session.
+      the whole REPL session. The SDK already retries 408/409/429/5xx with
+      exponential backoff + jitter internally (`maxRetries`, default 2); we
+      now pass an explicit, larger budget (`MAX_RETRIES = 5` in `agent.ts`)
+      and, more importantly, catch whatever error is left once that budget
+      is exhausted (or any non-retryable error, e.g. a network failure)
+      around the `messages.create` call so it ends the current turn with an
+      `onText` message instead of throwing out of `runTurn` and crashing
+      the whole process.
 - [x] Wrap `compact()` in try/catch so a failed summarization degrades to
       "skip compaction, log a warning, carry on" instead of crashing a turn
       that otherwise succeeded.
@@ -109,6 +116,14 @@ overall bootstrap plan these slot into.
 
 ## UX
 
+- [ ] Add more interactive-mode slash commands alongside the existing
+      `/exit` and `/mode`:
+  - [ ] `/help` — list available slash commands and current approval mode.
+  - [ ] `/clear` — reset the in-memory conversation history (`messages`)
+        without restarting the process, for starting a fresh task in the
+        same session.
+  - [ ] `/compact` — manually trigger `compact()` on demand instead of
+        only when `shouldCompact`'s automatic token threshold is hit.
 - [ ] Multi-line input in interactive mode (currently `rl.question` reads a
       single line, so pasting/writing a multi-paragraph prompt doesn't work).
       Needs a way to signal "end of input" (e.g. blank-line-to-submit, a

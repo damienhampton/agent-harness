@@ -7,6 +7,13 @@ import { checkApproval, createApprovalState, type ApprovalState, type OnApproval
 const MODEL = "claude-sonnet-5";
 const MAX_TOOL_TURNS = 25;
 const MAX_TOKENS = 8192;
+// The SDK already retries 408/409/429/5xx (incl. `overloaded_error`) with
+// exponential backoff + jitter internally; we just need to give it a
+// generous budget and make sure that if every retry is exhausted (or the
+// error isn't retryable at all, e.g. a network failure), that failure ends
+// the current turn gracefully instead of throwing out of runTurn and
+// crashing the whole REPL session (see catch around messages.create below).
+const MAX_RETRIES = 5;
 
 export type OnText = (text: string) => void;
 
@@ -52,16 +59,27 @@ export async function runTurn(
   approvalState: ApprovalState = createApprovalState(),
   onApprovalRequest?: OnApprovalRequest
 ): Promise<void> {
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, maxRetries: MAX_RETRIES });
 
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
     logEvent("request", { turn, messages });
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      tools: toolDefs,
-      messages,
-    });
+    let response: Anthropic.Message;
+    try {
+      response = await client.messages.create({
+        model: MODEL,
+        max_tokens: MAX_TOKENS,
+        tools: toolDefs,
+        messages,
+      });
+    } catch (err) {
+      // The SDK has already exhausted its own retry/backoff budget (or hit a
+      // non-retryable error, e.g. a network failure) by the time we get
+      // here. Surface it and end the turn cleanly rather than letting it
+      // propagate out of runTurn and take down the whole REPL session.
+      logEvent("request_failed", { turn, error: (err as Error).message });
+      onText(`[request failed after retries, turn aborted: ${(err as Error).message}]`);
+      return;
+    }
     logEvent("response", { turn, response });
 
     if (response.stop_reason === "max_tokens") {
