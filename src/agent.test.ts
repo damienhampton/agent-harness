@@ -216,6 +216,18 @@ describe("runTurn", () => {
     expect(messages.filter((m) => m.role === "assistant")).toHaveLength(1);
   });
 
+  it("ends the turn gracefully instead of crashing when the API call fails after retries", async () => {
+    createMock.mockRejectedValueOnce(new Error("overloaded_error: 529"));
+
+    const messages: any[] = [{ role: "user", content: "hello" }];
+    const seen: string[] = [];
+    await expect(runTurn("fake-key", messages, (t) => seen.push(t))).resolves.toBeUndefined();
+
+    expect(seen.some((t) => t.includes("request failed after retries"))).toBe(true);
+    // no assistant message was recorded for the failed call
+    expect(messages).toHaveLength(1);
+  });
+
   it("stops after the max tool-turn cap instead of looping forever", async () => {
     const filePath = join(dir, "loop.txt");
     writeFileSync(filePath, "x");
