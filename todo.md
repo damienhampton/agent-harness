@@ -25,9 +25,14 @@ overall bootstrap plan these slot into.
       `maybeCompact` now runs after every tool round trip, not just at
       turn-end. (Found for real: a self-mod session hit a 1,008,113-token
       prompt this way.)
-- [ ] Change compaction to a sliding window: summarize everything except the
+- [x] Change compaction to a sliding window: summarize everything except the
       last N messages, keep those verbatim, instead of replacing the entire
-      history with one summary.
+      history with one summary. `compact()` now keeps the most recent
+      `KEEP_LAST_MESSAGES` (10) verbatim, walking forward to the next
+      assistant message so the summary + kept tail stays alternating, and
+      only summarizes the older prefix; if the whole conversation already
+      fits in the window it skips the summary call entirely rather than
+      making a pointless one.
 - [ ] Fix stale `"main": "index.js"` in package.json (real entry is
       `dist/index.js` via `bin`).
 - [ ] Add `AbortController`/cancellation support so Ctrl+C can interrupt a

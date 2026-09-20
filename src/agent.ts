@@ -27,6 +27,12 @@ async function maybeCompact(
   if (!shouldCompact(usage)) return;
   try {
     const compacted = await compact(client, messages);
+    if (compacted === messages) {
+      // Nothing old enough to fold away yet (conversation is already
+      // shorter than the sliding window) -- compact() made no API call and
+      // returned the same array, so there's nothing to report.
+      return;
+    }
     messages.length = 0;
     messages.push(...compacted);
     onText(`[context window filling up, compacted conversation history]`);
