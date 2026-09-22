@@ -149,42 +149,70 @@ describe("runTurn", () => {
   });
 
   it("compacts history via a summary call when the context window fills up", async () => {
+    // Seed a history longer than the sliding window so there's an old
+    // enough prefix for compaction to actually fold away.
+    const messages: any[] = [];
+    for (let i = 0; i < 12; i++) {
+      messages.push({ role: "user", content: `old message ${i}` });
+      messages.push({ role: "assistant", content: `old reply ${i}` });
+    }
+
     createMock
       .mockResolvedValueOnce(textResponse("done for now", 150_000))
       .mockResolvedValueOnce(textResponse("summary: user asked X, we did Y"));
 
-    const messages: any[] = [{ role: "user", content: "a long conversation happened before this" }];
     await runTurn("fake-key", messages, () => {});
 
     expect(createMock).toHaveBeenCalledTimes(2);
-    expect(messages).toHaveLength(1);
+    // history shrank: the old prefix collapsed into one summary message,
+    // recent messages (including this turn's exchange) kept verbatim.
+    expect(messages.length).toBeLessThan(26);
     expect(messages[0].content).toContain("summary: user asked X, we did Y");
+    expect(messages.at(-1)).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "done for now" }],
+    });
   });
 
   it("degrades to a warning instead of crashing when compaction itself fails", async () => {
+    // Seed a history longer than the sliding window so compact() actually
+    // has a prefix to summarize (and thus a summary call that can fail).
+    const messages: any[] = [];
+    for (let i = 0; i < 12; i++) {
+      messages.push({ role: "user", content: `old message ${i}` });
+      messages.push({ role: "assistant", content: `old reply ${i}` });
+    }
+
     createMock
       .mockResolvedValueOnce(textResponse("done for now", 150_000))
       .mockRejectedValueOnce(new Error("summary call failed"));
 
-    const messages: any[] = [{ role: "user", content: "a long conversation happened before this" }];
     const seen: string[] = [];
     await expect(runTurn("fake-key", messages, (t) => seen.push(t))).resolves.toBeUndefined();
 
     expect(seen.some((t) => t.includes("compaction failed"))).toBe(true);
     // history is left untouched rather than half-cleared
-    expect(messages).toHaveLength(2);
+    expect(messages).toHaveLength(25);
   });
 
   it("compacts mid-turn after a tool round trip, not just when the turn ends", async () => {
     const filePath = join(dir, "big.txt");
     writeFileSync(filePath, "x");
 
+    // Seed a history longer than the sliding window so the tool round trip
+    // below actually triggers a real (not no-op) compaction.
+    const messages: any[] = [];
+    for (let i = 0; i < 12; i++) {
+      messages.push({ role: "user", content: `old message ${i}` });
+      messages.push({ role: "assistant", content: `old reply ${i}` });
+    }
+    messages.push({ role: "user", content: "do a long task" });
+
     createMock
       .mockResolvedValueOnce(toolUseResponse("tu1", "read_file", { path: filePath }, 150_000))
       .mockResolvedValueOnce(textResponse("summary: read a file, more to do"))
       .mockResolvedValueOnce(textResponse("all done"));
 
-    const messages: any[] = [{ role: "user", content: "do a long task" }];
     const seen: string[] = [];
     await runTurn("fake-key", messages, (t) => seen.push(t));
 
@@ -194,10 +222,48 @@ describe("runTurn", () => {
     expect(createMock).toHaveBeenCalledTimes(3);
     expect(seen.some((t) => t.includes("compacted"))).toBe(true);
     expect(seen.at(-1)).toBe("all done");
-    // history collapsed to [summary, assistant "all done"], not left growing
-    // across the whole 25-tool-turn budget
-    expect(messages).toHaveLength(2);
+    // Sliding-window compaction: only the old prefix gets folded into the
+    // summary; the tool round trip and the final answer survive verbatim
+    // rather than the whole history being collapsed away.
     expect(messages[0].content).toContain("summary: read a file, more to do");
+    expect(messages.at(-1)).toEqual({ role: "assistant", content: [{ type: "text", text: "all done" }] });
+    expect(messages.length).toBeGreaterThan(2);
+  });
+
+  it("keeps recent messages verbatim across repeated compactions instead of collapsing everything", async () => {
+    // Simulate a long-running, tool-heavy turn: every round trip re-triggers
+    // shouldCompact (usage pinned above threshold), so compact() runs many
+    // times in a row. Recent tool activity should still be readable
+    // afterwards rather than being summarized away on every single pass.
+    const filePath = join(dir, "notes.txt");
+    writeFileSync(filePath, "hello");
+
+    // Seed a history longer than the sliding window so every round trip
+    // below has an old-enough prefix to actually fold away.
+    const messages: any[] = [];
+    for (let i = 0; i < 12; i++) {
+      messages.push({ role: "user", content: `old message ${i}` });
+      messages.push({ role: "assistant", content: `old reply ${i}` });
+    }
+    messages.push({ role: "user", content: "do a very long task" });
+
+    for (let i = 0; i < 6; i++) {
+      createMock.mockResolvedValueOnce(toolUseResponse(`tu${i}`, "read_file", { path: filePath }, 150_000));
+      createMock.mockResolvedValueOnce(textResponse(`summary after round ${i}`));
+    }
+    createMock.mockResolvedValueOnce(textResponse("all done"));
+
+    const seen: string[] = [];
+    await runTurn("fake-key", messages, (t) => seen.push(t));
+
+    expect(seen.filter((t) => t.includes("compacted")).length).toBe(6);
+    expect(seen.at(-1)).toBe("all done");
+    // the most recent tool round trip is still present verbatim, not folded
+    // into a summary, since it's well within the kept window
+    const lastToolResult = messages.at(-2);
+    expect(lastToolResult.role).toBe("user");
+    expect(lastToolResult.content[0].type).toBe("tool_result");
+    expect(lastToolResult.content[0].content).toBe("hello");
   });
 
   it("retries instead of silently ending the turn on max_tokens truncation", async () => {
